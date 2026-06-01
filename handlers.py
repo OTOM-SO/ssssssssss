@@ -7,7 +7,8 @@ import re
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    ReplyKeyboardRemove,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
     Update,
 )
 from telegram.constants import ParseMode
@@ -42,8 +43,24 @@ logger = logging.getLogger(__name__)
 # Разделитель диапазона времени: дефис или тире.
 _TIME_RANGE_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})\s*$")
 
+# Тексты постоянных кнопок («горячих клавиш») под полем ввода.
+NEW_REQUEST_BTN = "📝 Новая заявка"
+FINISH_BTN = "🛑 Завершить"
+
+# Регэксп, которым ConversationHandler ловит нажатия этих кнопок.
+_BUTTON_RE = re.compile(f"^({re.escape(NEW_REQUEST_BTN)}|{re.escape(FINISH_BTN)})$")
+
 
 # --- Вспомогательные функции ----------------------------------------------
+
+
+def _main_keyboard() -> ReplyKeyboardMarkup:
+    """Постоянная клавиатура с кнопками запуска и завершения заявки."""
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(NEW_REQUEST_BTN), KeyboardButton(FINISH_BTN)]],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
 
 
 def _laptop_keyboard() -> InlineKeyboardMarkup:
@@ -112,7 +129,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "прервать заполнение командой /cancel.\n\n"
         "1️⃣ Укажите *ФИО организатора*:",
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=_main_keyboard(),
     )
     return FULL_NAME
 
@@ -305,8 +322,9 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     await update.message.reply_text(
-        "❌ Заполнение заявки отменено. Чтобы начать заново, отправьте /start.",
-        reply_markup=ReplyKeyboardRemove(),
+        "❌ Заполнение заявки отменено. Чтобы начать заново, нажмите "
+        f"«{NEW_REQUEST_BTN}» или отправьте /start.",
+        reply_markup=_main_keyboard(),
     )
     return ConversationHandler.END
 
@@ -319,6 +337,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "мероприятии, дате, времени, площадке и нужном оборудовании, "
         "а затем отправит заявку технической команде и добавит событие "
         "в общий календарь.\n\n"
+        "*Кнопки под полем ввода:*\n"
+        f"«{NEW_REQUEST_BTN}» — начать новую заявку\n"
+        f"«{FINISH_BTN}» — завершить заполнение\n\n"
         "*Команды:*\n"
         "/start — начать новую заявку\n"
         "/cancel — отменить заполнение\n"
@@ -341,9 +362,17 @@ async def chat_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 def build_conversation_handler() -> ConversationHandler:
     """Собирает ConversationHandler со всеми шагами диалога."""
-    text_only = filters.TEXT & ~filters.COMMAND
+    # Текст обычных ответов: не команда и не нажатие постоянных кнопок —
+    # иначе «🛑 Завершить» попало бы, например, в поле ФИО.
+    button_filter = filters.Regex(_BUTTON_RE)
+    text_only = filters.TEXT & ~filters.COMMAND & ~button_filter
+    new_request_filter = filters.Regex(f"^{re.escape(NEW_REQUEST_BTN)}$")
+    finish_filter = filters.Regex(f"^{re.escape(FINISH_BTN)}$")
     return ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            MessageHandler(new_request_filter, start),
+        ],
         states={
             FULL_NAME: [MessageHandler(text_only, full_name)],
             CONTACT: [MessageHandler(text_only, contact)],
@@ -356,5 +385,9 @@ def build_conversation_handler() -> ConversationHandler:
             LAPTOP: [CallbackQueryHandler(laptop, pattern="^laptop_")],
             CONFIRM: [CallbackQueryHandler(confirm, pattern="^confirm_")],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            MessageHandler(finish_filter, cancel),
+            MessageHandler(new_request_filter, start),
+        ],
     )
