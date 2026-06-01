@@ -8,7 +8,10 @@ from urllib.parse import parse_qs, urlparse
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Загружаем .env из папки с кодом, а не из текущей рабочей директории, — иначе
+# при запуске бота из другого каталога переменные (в т.ч. CALENDAR_ID) просто
+# не подхватываются, и календарь молча отключается.
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +50,15 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 WORK_CHAT_ID = os.getenv("WORK_CHAT_ID", "")
 CALENDAR_ID = _normalize_calendar_id(os.getenv("CALENDAR_ID", ""))
 TIMEZONE = os.getenv("TIMEZONE", "Europe/Moscow")
-GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "credentials.json")
+
+# Путь к ключу сервисного аккаунта. Относительный путь привязываем к папке с
+# кодом, а не к текущей рабочей директории, — иначе при запуске бота из другого
+# каталога файл «не находится» и календарь молча отключается.
+_creds_raw = os.getenv("GOOGLE_CREDENTIALS_JSON", "credentials.json")
+if os.path.isabs(_creds_raw):
+    GOOGLE_CREDENTIALS_JSON = _creds_raw
+else:
+    GOOGLE_CREDENTIALS_JSON = os.path.join(os.path.dirname(__file__), _creds_raw)
 
 
 def validate_config() -> None:
