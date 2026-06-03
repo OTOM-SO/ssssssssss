@@ -34,11 +34,12 @@ logger = logging.getLogger(__name__)
     DEPARTMENT,
     DATE,
     TIME,
+    ADD_MORE_DATE,
     VENUE,
     DESCRIPTION,
     LAPTOP,
     CONFIRM,
-) = range(10)
+) = range(11)
 
 # Разделитель диапазона времени: дефис или тире.
 _TIME_RANGE_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})\s*$")
@@ -74,6 +75,17 @@ def _laptop_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _add_more_date_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("➕ Добавить ещё дату", callback_data="add_date_yes"),
+                InlineKeyboardButton("✅ Готово", callback_data="add_date_no"),
+            ]
+        ]
+    )
+
+
 def _confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -83,16 +95,26 @@ def _confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _format_dates_times(dates_times: list) -> str:
+    """Форматирует список дат-времени для вывода."""
+    if not dates_times:
+        return "—"
+    lines = []
+    for i, (date_str, time_str) in enumerate(dates_times, 1):
+        lines.append(f"{i}. {date_str} ({time_str})")
+    return "\n".join(lines)
+
+
 def _build_summary(data: dict) -> str:
     """Формирует итоговое сообщение в Markdown."""
+    dates_times_str = _format_dates_times(data.get('dates_times', []))
     return (
         "📋 *ЗАЯВКА НА ТЕХСОПРОВОЖДЕНИЕ*\n\n"
         f"👤 *Организатор:* {data['full_name']}\n"
         f"📞 *Контакт:* {data['contact']}\n\n"
         f"🎪 *Мероприятие:* {data['event_name']}\n"
         f"🏢 *Подразделение:* {data['department']}\n"
-        f"📅 *Дата:* {data['date']}\n"
-        f"⏰ *Время:* {data['time']}\n"
+        f"📅 *Даты и время:*\n{dates_times_str}\n"
         f"📍 *Площадка:* {data['venue']}\n\n"
         "🎛 *Техсопровождение:*\n"
         f"{data['description']}\n\n"
@@ -102,14 +124,14 @@ def _build_summary(data: dict) -> str:
 
 def _build_plain_summary(data: dict) -> str:
     """Тот же итог, но без Markdown — для описания события в календаре."""
+    dates_times_str = _format_dates_times(data.get('dates_times', []))
     return (
         "ЗАЯВКА НА ТЕХСОПРОВОЖДЕНИЕ\n\n"
         f"Организатор: {data['full_name']}\n"
         f"Контакт: {data['contact']}\n\n"
         f"Мероприятие: {data['event_name']}\n"
         f"Подразделение: {data['department']}\n"
-        f"Дата: {data['date']}\n"
-        f"Время: {data['time']}\n"
+        f"Даты и время:\n{dates_times_str}\n"
         f"Площадка: {data['venue']}\n\n"
         "Техсопровождение:\n"
         f"{data['description']}\n\n"
@@ -164,8 +186,9 @@ async def event_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def department(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["department"] = update.message.text.strip()
+    context.user_data["dates_times"] = []  # Инициализируем список дат-времени
     await update.message.reply_text(
-        "5️⃣ Укажите *дату мероприятия* в формате ДД.ММ.ГГГГ (например, 15.06.2026):",
+        "5️⃣ Укажите *первую дату мероприятия* в формате ДД.ММ.ГГГГ (например, 15.06.2026):",
         parse_mode=ParseMode.MARKDOWN,
     )
     return DATE
@@ -211,12 +234,37 @@ async def time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return TIME
 
     # Сохраняем в каноничном виде с обычным тире.
-    context.user_data["time"] = f"{sh:02d}:{sm:02d}–{eh:02d}:{em:02d}"
+    time_str = f"{sh:02d}:{sm:02d}–{eh:02d}:{em:02d}"
+    date_str = context.user_data["date"]
+    context.user_data["dates_times"].append((date_str, time_str))
+    
     await update.message.reply_text(
-        "7️⃣ Укажите *площадку* (адрес или аудитория):",
+        f"✅ Дата и время добавлены: {date_str} ({time_str})\n\n"
+        "Желаете добавить ещё дату?",
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_add_more_date_keyboard(),
     )
-    return VENUE
+    return ADD_MORE_DATE
+
+
+async def add_more_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "add_date_yes":
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            "Укажите *следующую дату* в формате ДД.ММ.ГГГГ (например, 16.06.2026):",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return DATE
+    else:  # add_date_no
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            "7️⃣ Укажите *площадку* (адрес или аудитория):",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return VENUE
 
 
 async def venue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -286,18 +334,25 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         logger.exception("Не удалось отправить заявку в рабочий чат")
         sent_ok = False
 
-    # 2. Создаём событие в Google Calendar (не критично).
+    # 2. Создаём события в Google Calendar для каждой даты (не критично).
     calendar_note = ""
     if calendar_api.calendar_enabled():
         try:
-            link = await calendar_api.create_event(
-                summary=data["event_name"],
-                description=_build_plain_summary(data),
-                location=data["venue"],
-                date_str=data["date"],
-                time_str=data["time"],
-            )
-            calendar_note = f"\n📆 Событие добавлено в календарь: {link}" if link else ""
+            links = []
+            for date_str, time_str in data.get("dates_times", []):
+                link = await calendar_api.create_event(
+                    summary=data["event_name"],
+                    description=_build_plain_summary(data),
+                    location=data["venue"],
+                    date_str=date_str,
+                    time_str=time_str,
+                )
+                if link:
+                    links.append(link)
+            if links:
+                calendar_note = f"\n📆 События добавлены в календарь ({len(links)} шт.)"
+            else:
+                calendar_note = ""
         except Exception:
             logger.exception("Ошибка при создании события в Google Calendar")
             calendar_note = (
@@ -380,6 +435,7 @@ def build_conversation_handler() -> ConversationHandler:
             DEPARTMENT: [MessageHandler(text_only, department)],
             DATE: [MessageHandler(text_only, date)],
             TIME: [MessageHandler(text_only, time)],
+            ADD_MORE_DATE: [CallbackQueryHandler(add_more_date, pattern="^add_date_")],
             VENUE: [MessageHandler(text_only, venue)],
             DESCRIPTION: [MessageHandler(text_only, description)],
             LAPTOP: [CallbackQueryHandler(laptop, pattern="^laptop_")],
