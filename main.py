@@ -23,10 +23,23 @@ def main() -> None:
     config.validate_config()
 
     if calendar_api.calendar_enabled():
-        logger.info(
-            "Google Calendar подключён: события будут сохраняться в календарь %s.",
-            config.CALENDAR_ID,
-        )
+        # Проверяем доступ к календарю сразу при старте, а не молча падаем
+        # во время первой заявки. Так проблема с ключом или доступом видна
+        # в логах немедленно.
+        ok, message = calendar_api.check_access()
+        if ok:
+            logger.info(
+                "Google Calendar подключён (%s, календарь %s).",
+                message,
+                config.CALENDAR_ID,
+            )
+        else:
+            logger.warning(
+                "Google Calendar НЕ работает: %s. "
+                "Заявки будут уходить в чат, но события создаваться НЕ будут, "
+                "пока проблема не устранена.",
+                message,
+            )
     else:
         logger.warning(
             "Google Calendar отключён (CALENDAR_ID=%r, ключ: %s). "

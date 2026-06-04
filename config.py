@@ -60,6 +60,30 @@ if os.path.isabs(_creds_raw):
 else:
     GOOGLE_CREDENTIALS_JSON = os.path.join(os.path.dirname(__file__), _creds_raw)
 
+# На хостингах с эфемерной файловой системой (Railway, Heroku и т.п.) файл ключа
+# нельзя просто положить рядом с кодом: в git он не хранится (секрет), а после
+# каждого деплоя файловая система обнуляется. Поэтому поддерживаем передачу ключа
+# через переменную окружения GOOGLE_CREDENTIALS_JSON_B64 — это содержимое
+# credentials.json, закодированное в base64 (base64 выбран, чтобы переносы строк
+# в приватном ключе не ломались в UI переменных). Если переменная задана, при
+# старте декодируем её и пишем файл по пути GOOGLE_CREDENTIALS_JSON, а дальше всё
+# работает как с обычным файлом.
+_creds_b64 = os.getenv("GOOGLE_CREDENTIALS_JSON_B64", "").strip()
+if _creds_b64:
+    try:
+        decoded = base64.b64decode(_creds_b64)
+        with open(GOOGLE_CREDENTIALS_JSON, "wb") as fh:
+            fh.write(decoded)
+        logger.info(
+            "Ключ Google записан из GOOGLE_CREDENTIALS_JSON_B64 в %s",
+            GOOGLE_CREDENTIALS_JSON,
+        )
+    except Exception:
+        logger.exception(
+            "Не удалось декодировать GOOGLE_CREDENTIALS_JSON_B64 — "
+            "проверьте, что это корректный base64 от credentials.json."
+        )
+
 
 def validate_config() -> None:
     """Проверяет наличие обязательных переменных. Бросает RuntimeError при ошибке."""

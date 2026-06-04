@@ -417,15 +417,19 @@ async def chat_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 def build_conversation_handler() -> ConversationHandler:
     """Собирает ConversationHandler со всеми шагами диалога."""
+    # Заявка заполняется только в личной переписке с ботом, а готовый итог
+    # уходит в рабочий чат (WORK_CHAT_ID). Так форму не заполняют прямо в
+    # группе и сообщения других участников не попадают в поля заявки.
+    private = filters.ChatType.PRIVATE
     # Текст обычных ответов: не команда и не нажатие постоянных кнопок —
     # иначе «🛑 Завершить» попало бы, например, в поле ФИО.
     button_filter = filters.Regex(_BUTTON_RE)
-    text_only = filters.TEXT & ~filters.COMMAND & ~button_filter
-    new_request_filter = filters.Regex(f"^{re.escape(NEW_REQUEST_BTN)}$")
-    finish_filter = filters.Regex(f"^{re.escape(FINISH_BTN)}$")
+    text_only = filters.TEXT & ~filters.COMMAND & ~button_filter & private
+    new_request_filter = filters.Regex(f"^{re.escape(NEW_REQUEST_BTN)}$") & private
+    finish_filter = filters.Regex(f"^{re.escape(FINISH_BTN)}$") & private
     return ConversationHandler(
         entry_points=[
-            CommandHandler("start", start),
+            CommandHandler("start", start, filters=private),
             MessageHandler(new_request_filter, start),
         ],
         states={

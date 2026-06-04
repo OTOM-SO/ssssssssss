@@ -6,8 +6,10 @@ import logging
 import os
 import re
 
+from google.auth.exceptions import GoogleAuthError
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from config import CALENDAR_ID, GOOGLE_CREDENTIALS_JSON, TIMEZONE
 
@@ -32,6 +34,46 @@ def _build_service():
         GOOGLE_CREDENTIALS_JSON, scopes=SCOPES
     )
     return build("calendar", "v3", credentials=credentials, cache_discovery=False)
+
+
+def check_access() -> tuple[bool, str]:
+    """Проверяет, что сервисный аккаунт авторизуется и видит календарь.
+
+    Делает один лёгкий запрос к Google (calendars.get). Это ловит обе самые
+    частые причины «событие не создаётся»: отклонённый ключ сервисного
+    аккаунта и отсутствие доступа к календарю. Возвращает (ok, сообщение)
+    и ничего не бросает — предназначена для самопроверки при старте.
+    """
+    if not CALENDAR_ID:
+        return False, "CALENDAR_ID не задан"
+    if not os.path.exists(GOOGLE_CREDENTIALS_JSON):
+        return False, f"файл ключа не найден: {GOOGLE_CREDENTIALS_JSON}"
+    try:
+        service = _build_service()
+        info = service.calendars().get(calendarId=CALENDAR_ID).execute()
+    except GoogleAuthError as exc:
+        return False, (
+            "авторизация не прошла — Google отклонил ключ сервисного аккаунта "
+            f"(перевыпустите ключ в Google Cloud Console). Подробности: {exc}"
+        )
+    except HttpError as exc:
+        status = getattr(exc.resp, "status", None)
+        if status == 404:
+            return False, (
+                f"календарь '{CALENDAR_ID}' не найден или не расшарен сервисному "
+                "аккаунту"
+            )
+        if status in (401, 403):
+            return False, (
+                f"нет доступа к календарю '{CALENDAR_ID}' — расшарьте его "
+                "сервисному аккаунту с правом «Внесение изменений в мероприятия»"
+            )
+        return False, f"ошибка Google API: {exc}"
+    except Exception as exc:  # noqa: BLE001 — на старте сообщаем любую причину
+        return False, f"не удалось проверить календарь: {exc}"
+
+    name = info.get("summary", CALENDAR_ID)
+    return True, f"доступ к календарю «{name}» подтверждён"
 
 
 def _parse_datetimes(date_str: str, time_str: str):
